@@ -2,7 +2,7 @@
 
 Track-Hub is an AI-powered development assistant that helps you understand codebases, analyze repositories, and transcribe meetings.
 
-![image](https://github.com/user-attachments/assets/edc5e414-ff90-4cb1-8cd2-fb930dd32889)
+
 
 ## How it works
 
