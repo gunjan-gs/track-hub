@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 import { pollCommits } from "~/lib/github";
 import { checkCredits, indexGithubRepo } from "~/lib/github-loader";
+import { Octokit } from "octokit";
 
 export const projectRouter = createTRPCRouter({
 
@@ -247,6 +248,72 @@ export const projectRouter = createTRPCRouter({
             where: { userId: ctx.user.userId! },
             orderBy: { createdAt: 'desc' },
         });
+    }),
+
+    getBranches: protectedProcedure.input(z.object({
+        projectId: z.string(),
+    })).query(async ({ ctx, input }) => {
+        const project = await ctx.db.project.findUnique({
+            where: { id: input.projectId },
+            select: { repoUrl: true, gitHubToken: true },
+        })
+        if (!project?.repoUrl) throw new Error("Repository URL not configured")
+        const parts = project.repoUrl.split("/")
+        const [owner, repo] = parts.slice(-2) as [string | undefined, string | undefined]
+        if (!owner || !repo) throw new Error("Invalid repository URL")
+        const octokit = new Octokit({ auth: project.gitHubToken || process.env.GITHUB_ACCESS_TOKEN })
+        try {
+            const { data } = await octokit.rest.repos.listBranches({ owner, repo })
+            return data.map(b => b.name)
+        } catch (err: any) {
+            if (err?.status === 401) throw new Error("GitHub authentication failed")
+            if (err?.status === 403) throw new Error("GitHub rate limit exceeded")
+            throw new Error("Unable to fetch branches")
+        }
+    }),
+
+    commitToRepo: protectedProcedure.input(z.object({
+        projectId: z.string(),
+        branch: z.string().min(1),
+        message: z.string().min(1),
+        files: z.array(z.object({ path: z.string().min(1), content: z.string().min(1) })).min(1),
+    })).mutation(async ({ ctx, input }) => {
+        const project = await ctx.db.project.findUnique({
+            where: { id: input.projectId },
+            select: { repoUrl: true, gitHubToken: true },
+        })
+        if (!project?.repoUrl) throw new Error("Repository URL not configured")
+        const token = project.gitHubToken || process.env.GITHUB_ACCESS_TOKEN
+        if (!token) throw new Error("GitHub token not available")
+        const parts = project.repoUrl.split("/")
+        const [owner, repo] = parts.slice(-2) as [string | undefined, string | undefined]
+        if (!owner || !repo) throw new Error("Invalid repository URL")
+        const octokit = new Octokit({ auth: token })
+
+        try {
+            const ref = await octokit.rest.git.getRef({ owner, repo, ref: `heads/${input.branch}` })
+            const baseCommitSha: string = ref.data.object.sha as string
+            const baseCommit = await octokit.rest.git.getCommit({ owner, repo, commit_sha: baseCommitSha })
+            const baseTreeSha: string = baseCommit.data.tree.sha as string
+
+            const treeEntries = input.files.map((f) => ({
+                path: f.path,
+                mode: "100644" as const,
+                type: "blob" as const,
+                content: f.content,
+            }))
+
+            const newTree = await octokit.rest.git.createTree({ owner, repo, base_tree: baseTreeSha, tree: treeEntries })
+            const newCommit = await octokit.rest.git.createCommit({ owner, repo, message: input.message, tree: newTree.data.sha as string, parents: [baseCommitSha] })
+            await octokit.rest.git.updateRef({ owner, repo, ref: `heads/${input.branch}`, sha: newCommit.data.sha as string })
+            return { commitSha: newCommit.data.sha }
+        } catch (err: any) {
+            const status = err?.status
+            if (status === 401) throw new Error("Authentication failed. Please reconnect GitHub.")
+            if (status === 403) throw new Error("Insufficient permissions or rate limit exceeded.")
+            if (status === 404) throw new Error("Branch not found.")
+            throw new Error("Commit failed due to invalid data or network error.")
+        }
     }),
 
 });

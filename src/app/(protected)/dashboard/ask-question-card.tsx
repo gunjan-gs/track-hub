@@ -13,6 +13,8 @@ import { api } from '~/trpc/react'
 import { toast } from 'sonner'
 import useRefetch from '~/hooks/use-refetch'
 import { askQuestion } from './action'
+import { useAuth } from '@clerk/nextjs'
+import { useStreak } from '~/hooks/use-streak'
 import CodeRefrence from './code-refrence'
 
 
@@ -26,6 +28,8 @@ const AskQuestionCard = () => {
   const [filesReferences, setFilesReferences] = useState<{fileName: string, sourceCode: string, summary: string}[]>([])
   const [answer, setAnswer] = useState('')
   const saveAnswer= api.project.saveAnswer.useMutation()
+  const { userId } = useAuth()
+  const { logActivity } = useStreak(userId || undefined)
   
   const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     setAnswer('')
@@ -71,6 +75,7 @@ const AskQuestionCard = () => {
               onSuccess:()=>{
                 toast.success('Answer saved successfully')
                 refetch();
+                logActivity('question')
               },
               onError: (error) => {
                 toast.error("Failed to save answer");

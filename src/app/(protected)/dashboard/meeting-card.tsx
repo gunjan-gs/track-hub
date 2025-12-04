@@ -11,6 +11,8 @@ import useProject from '~/hooks/use-project';
 import { useRouter } from 'next/navigation';
 import { useMutation } from '@tanstack/react-query';
 import axios from 'axios';
+import { useAuth } from '@clerk/nextjs';
+import { useStreak } from '~/hooks/use-streak';
 
 
 const MeetingCard = () => {
@@ -31,6 +33,8 @@ const MeetingCard = () => {
     })
 
     const [isUploading, setIsUploading] = useState(false);
+    const { userId } = useAuth()
+    const { logActivity } = useStreak(userId || undefined)
     const uploadMeeting = api.project.uploadMeeting.useMutation()
     const {getInputProps, getRootProps}= useDropzone({
         accept:{
@@ -69,6 +73,7 @@ const MeetingCard = () => {
                             meetingId: meeting.id,
                             projectId: project.projectId
                         })
+                        logActivity('meeting')
                     },
                     onError: (error) => {
                         toast.error("Failed to upload meeting")
