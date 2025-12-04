@@ -3,6 +3,8 @@ import React, { Fragment, useState } from 'react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '~/components/ui/sheet';
 import useProject from '~/hooks/use-project'
 import { api } from '~/trpc/react';
+import { toast } from 'sonner';
+import { useEffect } from 'react';
 import AskQuestionCard from '../dashboard/ask-question-card';
 import MarkdownPreview from '@uiw/react-markdown-preview';
 import CodeRefrence from '../dashboard/code-refrence';
@@ -10,7 +12,16 @@ import { useTheme } from 'next-themes';
 
 const QAPage = () => {
   const {projectId}=useProject();
-  const {data: questions}= api.project.getQuestions.useQuery({projectId}); 
+  const {data: questions, error, isLoading}= api.project.getQuestions.useQuery(
+    { projectId },
+    { enabled: !!projectId }
+  ); 
+  useEffect(()=>{
+    if(error){
+      console.error('[QA] getQuestions error', error);
+      toast.error('Failed to load saved questions');
+    }
+  },[error])
   const { theme } = useTheme()
   const  [questionIndex, setQuestionIndex] = useState(0);
   const question = questions?.[questionIndex];
@@ -21,6 +32,12 @@ const QAPage = () => {
       <div className='h-4'></div>
       <h1 className='text-xl font-semibold'>Saved Question</h1>
       <div className="h-2"></div>
+      {isLoading && (
+        <p className='text-sm text-muted-foreground'>Loading saved questions…</p>
+      )}
+      {error && (
+        <p className='text-sm text-destructive'>Could not load saved questions.</p>
+      )}
       <div className="flex flex-col gap-2">
         {questions?.map((question, index)=>{
             return <Fragment key={question.id}>
@@ -47,7 +64,10 @@ const QAPage = () => {
       </div>
 
 
-      {question && (
+        {(!questions || questions.length === 0) && !isLoading && !error && (
+          <p className='text-sm text-muted-foreground'>No saved questions yet.</p>
+        )}
+        {question && (
         <SheetContent className='sm:max-w-[80vw]'>
           <SheetHeader>
             <SheetTitle>

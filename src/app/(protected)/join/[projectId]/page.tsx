@@ -44,7 +44,7 @@ const JoinHandler = async (props: Props) => {
                 }
             })
         }catch(err){
-            console.log('user already in project')
+            
     }
   return redirect(`/dashboard`)
 }

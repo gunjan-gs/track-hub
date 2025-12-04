@@ -16,7 +16,7 @@ export async function askQuestion(question: string, projectId: string) {
     const vectorQuery = `[${queryVector.join(",")}]`
 
     // Log the vector query for debugging
-    // console.log("Vector Query:", vectorQuery)
+    
 
     const result = await db.$queryRaw`
     SELECT "fileName", "sourceCode", "summary",
@@ -33,14 +33,14 @@ export async function askQuestion(question: string, projectId: string) {
     }[]
 
     // Log the result for debugging
-    // console.log("Query Result:", result)
+    
 
     let context = ""
-    // console.log("context", context);
+    
     for (const doc of result){
         context += `source: ${doc.fileName}\n code content: ${doc.sourceCode}\n summary of file: ${doc.summary} \n\n `
     }
-    // console.log("context", context);
+    
     (async ()=>{
         const {textStream} = await streamText({
             model:google("gemini-2.0-flash"),

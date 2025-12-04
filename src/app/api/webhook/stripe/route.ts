@@ -15,13 +15,13 @@ export async function POST(req: NextRequest) {
     try {
         event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!);
     } catch (err) {
-        console.log("Error stripe post", err);
+        
         return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
     }
 
     const session = event.data.object as Stripe.Checkout.Session;
 
-    console.log("Stripe", event.type);
+    
 
     if (event.type === 'checkout.session.completed') {
         const credits = Number(session.metadata?.['credits']);

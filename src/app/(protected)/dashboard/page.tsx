@@ -9,14 +9,12 @@ import CommitLog from './commit-log';
 import DeleteButton from './delete-button';
 import InviteButton from './invite-button';
 import TeamMembers from './team-members';
-import StreakWidget from './streak-widget';
- 
 
 
 
 const page = () => {
   const { project } = useProject();
-  // console.log("project",project)
+  
   // if(!project) return redirect('/create');
   return (
     <div>
@@ -51,15 +49,12 @@ const page = () => {
 
       </div>
 
-      <div className='mt-4'>
-        <StreakWidget />
-      </div>
-
 
       <div className='mt-4'>
+
         <div className='grid grid-cols-1 gap-4 sm:grid-cols-5'>
-          <AskQuestionCard />
-          <MeetingCard/>
+           <AskQuestionCard />
+           <MeetingCard/>
         </div>
       </div>
 

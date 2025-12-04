@@ -28,7 +28,7 @@ export const loadGithubRepo = async (repoUrl: string, githubToken?: string) => {
  * Generate embeddings for each document in the repo.
  */
 export const generateEmbeddings = async (docs: Document[]) => {
-  console.log("generating embeddings-------------------");
+  
   return Promise.all(
     docs.map(async (doc) => {
       const summary = await summariseCode(doc);
@@ -57,7 +57,7 @@ export const indexGithubRepo = async (
 
   await Promise.allSettled(
     allEmbeddings.map(async (embedding, index) => {
-      console.log(`processing ${index + 1} of ${allEmbeddings.length}`);
+      
       if (!embedding) return;
 
       const sourceCodeEmbedding = await db.sourceCodeEmbedding.create({

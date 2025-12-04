@@ -2,13 +2,13 @@ import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 import { pollCommits } from "~/lib/github";
 import { checkCredits, indexGithubRepo } from "~/lib/github-loader";
-import { Octokit } from "octokit";
+import { logger } from "~/lib/logger";
 
 export const projectRouter = createTRPCRouter({
 
     createProject: protectedProcedure.input(z.object({
-        name: z.string(),
-        repoUrl: z.string(),
+        name: z.string().trim().min(1),
+        repoUrl: z.string().url(),
         gitHubToken: z.string().optional(),
     })).mutation(async ({ctx, input}) => {
 
@@ -51,17 +51,17 @@ export const projectRouter = createTRPCRouter({
                 try {
                     await pollCommits(project.id);
                 } catch (err) {
-                    console.error("pollCommits failed", err);
+                    logger.error("pollCommits failed", err);
                 }
             })(),
             (async () => {
                 try {
                     await indexGithubRepo(project.id, repoUrl, gitHubToken);
                 } catch (err) {
-                    console.error("indexGithubRepo failed", err);
+                    logger.error("indexGithubRepo failed", err);
                 }
             })(),
-        ]).catch((err) => console.error("Background tasks error", err));
+        ]).catch((err) => logger.error("Background tasks error", err));
 
         await ctx.db.user.update({where:{id: ctx.user.userId!}, data:{credits: { decrement: fileCount}}});
         return project;
@@ -79,14 +79,14 @@ export const projectRouter = createTRPCRouter({
     })).query(async ({ctx, input}) => {
         const {projectId} = input;
 
-        console.log(`polling commits for project ${projectId}`);
+        logger.info(`[Commits] polling for project ${projectId}`);
 
         pollCommits(projectId)
             .then(() => {
-                console.log(`Successfully polled commits for project ${projectId}`);
+                logger.info(`[Commits] polled for project ${projectId}`);
             })
             .catch((error) => {
-                console.error(`Error polling commits for project ${projectId}`, error);
+                logger.error(`[Commits] error for project ${projectId}`, error);
             });
 
         return await ctx.db.commit.findMany({
@@ -94,40 +94,72 @@ export const projectRouter = createTRPCRouter({
         });
     }),
 
-    saveAnswer: protectedProcedure.input(z.object({
-        projectId: z.string(),
-        question: z.string(),
-        answer: z.string(),
-        filesRefrences:z.any()
-    })).mutation(async ({ctx, input}) => {
-        return await ctx.db.question.create({
-            data:{
-                answer: input.answer,
-                filesRefrences:input.filesRefrences,
-                projectId: input.projectId,
-                question: input.question,
-                userId: ctx.user.userId!,
-            }
+    saveAnswer: protectedProcedure
+      .input(
+        z.object({
+          projectId: z.string(),
+          question: z.string(),
+          answer: z.string(),
+          filesRefrences: z.any().optional(),
         })
-    }),
-    
-    getQuestions: protectedProcedure.input(z.object({
-        projectId: z.string(),
-    })).query(async ({ctx, input}) => {
-        return await ctx.db.question.findMany({
-            where: {projectId: input.projectId},
-            include:{
-                user: true,
+      )
+      .mutation(async ({ ctx, input }) => {
+        try {
+          const isMember = await ctx.db.userToProject.findFirst({
+            where: { userId: ctx.user.userId!, projectId: input.projectId },
+          })
+          if (!isMember) {
+            logger.warn(
+              `[QA] saveAnswer denied: user ${ctx.user.userId} not member of project ${input.projectId}`
+            )
+            throw new Error("Not authorized to save answers for this project")
+          }
+
+          const record = await ctx.db.question.create({
+            data: {
+              answer: input.answer,
+              filesRefrences: input.filesRefrences ?? null,
+              projectId: input.projectId,
+              question: input.question,
+              userId: ctx.user.userId!,
             },
-            orderBy: { createdAt: 'desc' },
-        });
-    }),
+          })
+          logger.info(
+            `[QA] saveAnswer success: question ${record.id} for project ${input.projectId}`
+          )
+          return record
+        } catch (err) {
+          logger.error("[QA] saveAnswer error", err)
+          throw err
+        }
+      }),
+    
+    getQuestions: protectedProcedure
+      .input(z.object({ projectId: z.string() }))
+      .query(async ({ ctx, input }) => {
+        try {
+          const items = await ctx.db.question.findMany({
+            where: { projectId: input.projectId },
+            include: { user: true },
+            orderBy: { createdAt: "desc" },
+          })
+          logger.info(
+            `[QA] getQuestions fetched ${items.length} items for project ${input.projectId}`
+          )
+          return items
+        } catch (err) {
+          logger.error("[QA] getQuestions error", err)
+          throw err
+        }
+      }),
 
     uploadMeeting: protectedProcedure.input(z.object({
         projectId: z.string(),
-        meetingUrl: z.string(),
-        name: z.string(),
+        meetingUrl: z.string().url(),
+        name: z.string().trim().min(1),
     })).mutation(async ({ctx, input}) => {
+        const isMember = await ctx.db.userToProject.findFirst({ where: { userId: ctx.user.userId!, projectId: input.projectId }})
+        if (!isMember) throw new Error("Not authorized for this project")
         const meeting = await ctx.db.meeting.create({
             data:{
                 meetingUrl: input.meetingUrl,
@@ -142,6 +174,8 @@ export const projectRouter = createTRPCRouter({
     getMeetings: protectedProcedure.input(z.object({
         projectId: z.string(),
     })).query(async ({ctx, input}) => {
+        const isMember = await ctx.db.userToProject.findFirst({ where: { userId: ctx.user.userId!, projectId: input.projectId }})
+        if (!isMember) throw new Error("Not authorized for this project")
         return await ctx.db.meeting.findMany({
             where: {projectId: input.projectId},
             include:{
@@ -153,6 +187,10 @@ export const projectRouter = createTRPCRouter({
     deleteMeeting: protectedProcedure.input(z.object({
         meetingId: z.string(),
     })).mutation(async ({ctx, input}) => {
+        const meeting = await ctx.db.meeting.findUnique({ where: { id: input.meetingId } })
+        if (!meeting) throw new Error('Meeting not found')
+        const isMember = await ctx.db.userToProject.findFirst({ where: { userId: ctx.user.userId!, projectId: meeting.projectId }})
+        if (!isMember) throw new Error("Not authorized for this project")
         return await ctx.db.meeting.delete({
             where: {id: input.meetingId},
         });
@@ -161,6 +199,10 @@ export const projectRouter = createTRPCRouter({
     getMeetingById: protectedProcedure.input(z.object({
         meetingId: z.string(),
     })).query(async ({ctx, input}) => {
+        const meeting = await ctx.db.meeting.findUnique({ where: { id: input.meetingId } })
+        if (!meeting) throw new Error('Meeting not found')
+        const isMember = await ctx.db.userToProject.findFirst({ where: { userId: ctx.user.userId!, projectId: meeting.projectId }})
+        if (!isMember) throw new Error("Not authorized for this project")
         return await ctx.db.meeting.findUnique({
             where: {id: input.meetingId},
             include:{
@@ -172,6 +214,8 @@ export const projectRouter = createTRPCRouter({
     deleteProject: protectedProcedure.input(z.object({
         projectId: z.string(),
     })).mutation(async ({ctx, input}) => {
+        const isMember = await ctx.db.userToProject.findFirst({ where: { userId: ctx.user.userId!, projectId: input.projectId }})
+        if (!isMember) throw new Error("Not authorized for this project")
         return await ctx.db.project.delete({
             where: {id: input.projectId},
         });
@@ -219,7 +263,7 @@ export const projectRouter = createTRPCRouter({
     try {
       fileCount = await checkCredits(input.githubUrl, token);
     } catch (err: any) {
-      console.error("Error fetching repo files:", err?.response?.data || err);
+      logger.error("Error fetching repo files:", err?.response?.data || err);
 
       // Handle GitHub API errors gracefully
       if (err?.response?.status === 401) {
@@ -248,72 +292,6 @@ export const projectRouter = createTRPCRouter({
             where: { userId: ctx.user.userId! },
             orderBy: { createdAt: 'desc' },
         });
-    }),
-
-    getBranches: protectedProcedure.input(z.object({
-        projectId: z.string(),
-    })).query(async ({ ctx, input }) => {
-        const project = await ctx.db.project.findUnique({
-            where: { id: input.projectId },
-            select: { repoUrl: true, gitHubToken: true },
-        })
-        if (!project?.repoUrl) throw new Error("Repository URL not configured")
-        const parts = project.repoUrl.split("/")
-        const [owner, repo] = parts.slice(-2) as [string | undefined, string | undefined]
-        if (!owner || !repo) throw new Error("Invalid repository URL")
-        const octokit = new Octokit({ auth: project.gitHubToken || process.env.GITHUB_ACCESS_TOKEN })
-        try {
-            const { data } = await octokit.rest.repos.listBranches({ owner, repo })
-            return data.map(b => b.name)
-        } catch (err: any) {
-            if (err?.status === 401) throw new Error("GitHub authentication failed")
-            if (err?.status === 403) throw new Error("GitHub rate limit exceeded")
-            throw new Error("Unable to fetch branches")
-        }
-    }),
-
-    commitToRepo: protectedProcedure.input(z.object({
-        projectId: z.string(),
-        branch: z.string().min(1),
-        message: z.string().min(1),
-        files: z.array(z.object({ path: z.string().min(1), content: z.string().min(1) })).min(1),
-    })).mutation(async ({ ctx, input }) => {
-        const project = await ctx.db.project.findUnique({
-            where: { id: input.projectId },
-            select: { repoUrl: true, gitHubToken: true },
-        })
-        if (!project?.repoUrl) throw new Error("Repository URL not configured")
-        const token = project.gitHubToken || process.env.GITHUB_ACCESS_TOKEN
-        if (!token) throw new Error("GitHub token not available")
-        const parts = project.repoUrl.split("/")
-        const [owner, repo] = parts.slice(-2) as [string | undefined, string | undefined]
-        if (!owner || !repo) throw new Error("Invalid repository URL")
-        const octokit = new Octokit({ auth: token })
-
-        try {
-            const ref = await octokit.rest.git.getRef({ owner, repo, ref: `heads/${input.branch}` })
-            const baseCommitSha: string = ref.data.object.sha as string
-            const baseCommit = await octokit.rest.git.getCommit({ owner, repo, commit_sha: baseCommitSha })
-            const baseTreeSha: string = baseCommit.data.tree.sha as string
-
-            const treeEntries = input.files.map((f) => ({
-                path: f.path,
-                mode: "100644" as const,
-                type: "blob" as const,
-                content: f.content,
-            }))
-
-            const newTree = await octokit.rest.git.createTree({ owner, repo, base_tree: baseTreeSha, tree: treeEntries })
-            const newCommit = await octokit.rest.git.createCommit({ owner, repo, message: input.message, tree: newTree.data.sha as string, parents: [baseCommitSha] })
-            await octokit.rest.git.updateRef({ owner, repo, ref: `heads/${input.branch}`, sha: newCommit.data.sha as string })
-            return { commitSha: newCommit.data.sha }
-        } catch (err: any) {
-            const status = err?.status
-            if (status === 401) throw new Error("Authentication failed. Please reconnect GitHub.")
-            if (status === 403) throw new Error("Insufficient permissions or rate limit exceeded.")
-            if (status === 404) throw new Error("Branch not found.")
-            throw new Error("Commit failed due to invalid data or network error.")
-        }
     }),
 
 });

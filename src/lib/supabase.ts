@@ -35,8 +35,7 @@ export const uploadFile = async (file: File) => {
         });
 
     if (error) {
-        console.error('Error uploading file:', error);
-        return { success: false}; // Return error message
+        return { success: false};
     }
 
     const { data: { publicUrl: publicURL } } = await supabase.storage
@@ -44,10 +43,8 @@ export const uploadFile = async (file: File) => {
         .getPublicUrl(filePath);
 
     if (!publicURL) {
-        console.error('Error getting public URL:', publicURL);
-        return { success: false, message: 'Error getting public URL' }; // Return error message
+        return { success: false, message: 'Error getting public URL' };
     }
 
-    console.log('File uploaded successfully:', publicURL);
     return { success: true, url: publicURL,data }; // Return success status and URL
 };
